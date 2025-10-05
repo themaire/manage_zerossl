@@ -1,0 +1,21 @@
+# Secrets et config locale
+secret_zerossl.sh
+/root/secret_zerossl.sh
+./domain_name.sh
+
+# Certificats / clés (ne jamais committer)
+*.pem
+*.crt
+*.key
+cert_id
+ca_bundle.crt
+fullchain.pem
+
+# Archives
+*.zip
+
+# Éditeurs / IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
