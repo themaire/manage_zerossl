@@ -7,8 +7,11 @@ if [ -f /root/secret_zerossl.sh ]; then
   . /root/secret_zerossl.sh
   # echo "Access key trouvée : $access_key."
 else
+  echo "Avez vous lancé le script avec sudo ?"
+  echo "Autre cause possible : "
   echo "Aucun fichier de secret trouvé (/root/secret_zerossl.sh). Vous devez définir 'access_key' dans /root/secret_zerossl.sh".
-  usage
+  echo "Relancer le script avec la commande: /bin/bash ./manage_zerossl.sh help"
+  echo "pour a voir de l'aide sur comment créer ce fichier s'il vous plait."
   exit 1
 fi
 
@@ -88,12 +91,13 @@ DOMAIN="votre-domaine.tld"
 -------------------------------------
 
 # Workflow complet
-./manage_zerossl.sh create_csr # Génération locale sécurisée
-./manage_zerossl.sh create # Demande à ZeroSSL
-./manage_zerossl.sh ctstart # Serveur temp pour validation HTTP
-./manage_zerossl.sh verify # Validation du domaine
-./manage_zerossl.sh ctstop # Quand vous aurez reçu l'email de validation
-./manage_zerossl.sh download # Récupération du certificat signé
+./manage_zerossl.sh create_csr   # Génération locale sécurisée
+./manage_zerossl.sh create       # Demande à ZeroSSL
+./manage_zerossl.sh ctstart      # Serveur temp pour validation HTTP
+./manage_zerossl.sh verify       # Validation du domaine
+./manage_zerossl.sh ctstop       # Quand vous aurez reçu l'email de validation
+./manage_zerossl.sh download     # Récupération du certificat signé
+./manage_zerossl.sh check_cert   # Vérification du certificat et de la clé privée
 
 Principe :
 ETAPE 1
@@ -143,6 +147,9 @@ Commandes:
   get           Récupère les métadonnées du certificat (status, dates...) via "Get certificate"
   download      Télécharge le certificat (ZIP) et extrait les fichiers
   renew         Renouvelle si le certificat expire bientôt (< 30 jours)
+  check_cert    Vérifie le statut du certificat et de la clé privée
+  ctstart       Démarre un conteneur Apache temporaire pour la validation HTTP
+  ctstop        Arrête le conteneur Apache temporaire
   help          Affiche cette aide
 
 Notes:
