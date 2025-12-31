@@ -105,15 +105,65 @@ sudo ./manage_zerossl.sh get
 sudo ./manage_zerossl.sh check_cert
 ```
 
-- Renouveler (si expiration < 30 jours)
+- Renouveler (si expiration < 30 jours) - interactif
 ```zsh
 sudo ./manage_zerossl.sh renew
+```
+
+- Renouvellement automatique (pour crontab, sans interaction)
+```zsh
+sudo ./manage_zerossl.sh renew-auto
 ```
 
 - Aide intégrée
 ```zsh
 ./manage_zerossl.sh help
 ```
+
+
+## 🔄 Renouvellement automatique (crontab)
+
+Le script propose deux modes de renouvellement :
+
+| Commande | Mode | Usage |
+|----------|------|-------|
+| `renew` | Interactif | Manuel, avec confirmation |
+| `renew-auto` | Automatique | Crontab, sans interaction |
+
+### Configuration du crontab
+
+Pour renouveler automatiquement chaque dimanche à 3h du matin :
+
+```zsh
+sudo crontab -e
+```
+
+Ajoutez cette ligne :
+```
+0 3 * * 0 /chemin/vers/manage_zerossl.sh renew-auto >> /var/log/zerossl_renew.log 2>&1
+```
+
+### Comportement de `renew-auto`
+
+1. ✅ Vérifie si le certificat expire dans moins de 30 jours
+2. 🚫 Si > 30 jours : ne fait rien, exit 0
+3. 🔄 Si < 30 jours : lance le workflow complet automatiquement
+   - Création d'une nouvelle demande
+   - Démarrage du conteneur Apache
+   - Validation HTTP
+   - Arrêt du conteneur
+   - Téléchargement du certificat si `issued`
+4. 📝 Logs horodatés pour suivi dans `/var/log/zerossl_renew.log`
+
+### ⚠️ Prérequis pour le crontab
+
+- **Port 80 libre** au moment de l'exécution (pas d'autre service qui bloque)
+- **Docker accessible** par root
+- **Créer le fichier de log** : `sudo touch /var/log/zerossl_renew.log`
+
+### 💡 Conseil
+
+Pensez à ajouter un redémarrage de votre serveur web après le renouvellement si nécessaire (nginx, apache2, ou votre conteneur Docker).
 
 
 ## 🔎 Détails techniques et sécurité

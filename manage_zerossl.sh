@@ -146,7 +146,8 @@ Commandes:
   verify        Lance uniquement la vérification de domaine (utilise cert_id sauvegardé)
   get           Récupère les métadonnées du certificat (status, dates...) via "Get certificate"
   download      Télécharge le certificat (ZIP) et extrait les fichiers
-  renew         Renouvelle si le certificat expire bientôt (< 30 jours)
+  renew         Renouvelle si le certificat expire bientôt (< 30 jours) - interactif
+  renew-auto    Renouvellement automatique pour crontab (sans interaction)
   check_cert    Vérifie le statut du certificat et de la clé privée
   ctstart       Démarre un conteneur Apache temporaire pour la validation HTTP
   ctstop        Arrête le conteneur Apache temporaire
@@ -279,7 +280,7 @@ action_apache_container() {
             docker stop apache-container
             sleep 1
             docker rm apache-container
-            docker image rm apache-container
+            docker image rm httpd:latest
             ;;
         *)
             echo "Usage: $0 {start|stop}"
@@ -341,7 +342,7 @@ download_certificate() {
     # À la fin de download_certificate()
     cat "$CERT_DIR/certificate.crt" "$CERT_DIR/ca_bundle.crt" > "$CERT_DIR/fullchain.pem" || true
     chmod 600 "$CERT_DIR/privkey.pem"
-    chmod 644 "$CERT_DIR"/{certificate.crt,ca_bundle.crt,fullchain.crt}
+    chmod 644 "$CERT_DIR"/{certificate.crt,ca_bundle.crt,fullchain.pem}
   else
     echo "unzip non disponible. Conservez le ZIP à cet emplacement et extrayez-le manuellement."
   fi
@@ -349,31 +350,160 @@ download_certificate() {
 
 # Fonction pour renouveler le certificat
 renew_certificate() {
-  # Si aucun cert actuel, on force la création
-  if [ ! -f "$CERT_DIR/cert.pem" ]; then
-    echo "Aucun certificat existant trouvé. Création d'un nouveau certificat..."
-    create_certificate
-    verify_domain
-    return
+  # Chercher le bon fichier (fullchain.pem ou certificate.crt)
+  local cert_file=""
+  if [ -f "$CERT_DIR/fullchain.pem" ]; then
+    cert_file="$CERT_DIR/fullchain.pem"
+  elif [ -f "$CERT_DIR/certificate.crt" ]; then
+    cert_file="$CERT_DIR/certificate.crt"
   fi
 
-  expiration_raw="$(openssl x509 -in "$CERT_DIR/cert.pem" -noout -enddate 2>/dev/null | cut -d= -f2 || true)"
+  if [ -z "$cert_file" ]; then
+    echo "⚠️  Aucun certificat existant trouvé dans $CERT_DIR."
+    echo "Utilisez le workflow complet pour créer un nouveau certificat :"
+    echo "  ./manage_zerossl.sh create_csr"
+    echo "  ./manage_zerossl.sh create"
+    echo "  ./manage_zerossl.sh ctstart"
+    echo "  ./manage_zerossl.sh verify"
+    echo "  ./manage_zerossl.sh ctstop"
+    echo "  ./manage_zerossl.sh download"
+    exit 1
+  fi
+
+  expiration_raw="$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2 || true)"
   if [ -z "$expiration_raw" ]; then
-    echo "Impossible de lire la date d'expiration. Recréation du certificat..."
-    create_certificate
-    verify_domain
-    return
+    echo "❌ Impossible de lire la date d'expiration de $cert_file."
+    exit 1
   fi
 
   expiration_ts="$(date -d "$expiration_raw" +%s)"
   now_ts="$(date +%s)"
+  days_left=$(( (expiration_ts - now_ts) / 86400 ))
 
-  if (( (expiration_ts - now_ts) < 2592000 )); then
-    echo "Le certificat expire bientôt. Renouvellement en cours..."
-    create_certificate
-    verify_domain
+  echo "📜 Certificat actuel : $cert_file"
+  echo "📅 Expiration : $expiration_raw ($days_left jours restants)"
+
+  if (( days_left > 30 )); then
+    echo "✅ Le certificat est encore valide plus de 30 jours. Pas de renouvellement nécessaire."
+    return 0
+  fi
+
+  echo ""
+  echo "⏰ Le certificat expire dans $days_left jours. Renouvellement recommandé."
+  echo ""
+  echo "Pour renouveler, exécutez le workflow complet :"
+  echo "  1) ./manage_zerossl.sh create_csr   # (optionnel si vous gardez la même clé)"
+  echo "  2) ./manage_zerossl.sh create"
+  echo "  3) ./manage_zerossl.sh ctstart"
+  echo "  4) ./manage_zerossl.sh verify"
+  echo "  5) ./manage_zerossl.sh ctstop"
+  echo "  6) ./manage_zerossl.sh download"
+  echo ""
+  read -rp "Voulez-vous (renouveller automatiquement) lancer automatiquement les étapes 2 à 6 maintenant ? (y/N): " answer
+  if [[ ! "$answer" =~ ^[Yy]$ ]]; then
+    echo "Abandon. Relancez les commandes manuellement quand vous êtes prêt."
+    return 0
+  fi
+
+  echo ""
+  echo "🚀 Lancement du renouvellement..."
+  create_certificate
+  get_certificate
+  action_apache_container start
+  echo "⏳ Attente 5s pour que le conteneur démarre..."
+  sleep 5
+  verify_domain
+  echo "⏳ Attente 15s pour la validation ZeroSSL..."
+  sleep 15
+  action_apache_container stop
+  download_certificate
+  check_certificates
+  echo ""
+  echo "🎉 Renouvellement terminé !"
+}
+
+# Fonction pour renouveler automatiquement (crontab, sans interaction)
+renew_auto() {
+  local LOG_PREFIX="[renew-auto $(date '+%Y-%m-%d %H:%M:%S')]"
+  echo "$LOG_PREFIX Démarrage du renouvellement automatique pour $DOMAIN"
+
+  # Chercher le bon fichier (fullchain.pem ou certificate.crt)
+  local cert_file=""
+  if [ -f "$CERT_DIR/fullchain.pem" ]; then
+    cert_file="$CERT_DIR/fullchain.pem"
+  elif [ -f "$CERT_DIR/certificate.crt" ]; then
+    cert_file="$CERT_DIR/certificate.crt"
+  fi
+
+  if [ -z "$cert_file" ]; then
+    echo "$LOG_PREFIX ❌ Aucun certificat existant trouvé dans $CERT_DIR. Utilisez 'renew' manuellement."
+    exit 1
+  fi
+
+  expiration_raw="$(openssl x509 -in "$cert_file" -noout -enddate 2>/dev/null | cut -d= -f2 || true)"
+  if [ -z "$expiration_raw" ]; then
+    echo "$LOG_PREFIX ❌ Impossible de lire la date d'expiration."
+    exit 1
+  fi
+
+  expiration_ts="$(date -d "$expiration_raw" +%s)"
+  now_ts="$(date +%s)"
+  days_left=$(( (expiration_ts - now_ts) / 86400 ))
+
+  echo "$LOG_PREFIX 📜 Certificat: $cert_file"
+  echo "$LOG_PREFIX 📅 Expiration: $expiration_raw ($days_left jours restants)"
+
+  if (( days_left > 30 )); then
+    echo "$LOG_PREFIX ✅ Certificat valide > 30 jours. Aucune action requise."
+    exit 0
+  fi
+
+  echo "$LOG_PREFIX ⏰ Renouvellement nécessaire ($days_left jours restants)."
+
+  # Étape 1: Créer le certificat
+  echo "$LOG_PREFIX 🔄 Création du certificat..."
+  create_certificate || { echo "$LOG_PREFIX ❌ Échec création certificat"; exit 1; }
+
+  # Étape 2: Récupérer les infos de validation
+  echo "$LOG_PREFIX 🔄 Récupération des infos de validation..."
+  get_certificate || { echo "$LOG_PREFIX ❌ Échec get_certificate"; exit 1; }
+
+  # Étape 3: Démarrer le conteneur Apache
+  echo "$LOG_PREFIX 🔄 Démarrage du conteneur Apache..."
+  action_apache_container start || { echo "$LOG_PREFIX ❌ Échec démarrage conteneur"; exit 1; }
+
+  echo "$LOG_PREFIX ⏳ Attente 5s pour démarrage conteneur..."
+  sleep 5
+
+  # Étape 4: Valider le domaine
+  echo "$LOG_PREFIX 🔄 Validation du domaine..."
+  verify_domain || { echo "$LOG_PREFIX ⚠️ Échec validation (peut être normal si déjà validé)"; }
+
+  echo "$LOG_PREFIX ⏳ Attente 20s pour validation ZeroSSL..."
+  sleep 20
+
+  # Étape 5: Arrêter le conteneur
+  echo "$LOG_PREFIX 🔄 Arrêt du conteneur Apache..."
+  action_apache_container stop || { echo "$LOG_PREFIX ⚠️ Échec arrêt conteneur"; }
+
+  # Étape 6: Vérifier le statut et télécharger si issued
+  echo "$LOG_PREFIX 🔄 Vérification du statut..."
+  load_cert_id
+  local status_resp="$(curl -s -G "https://api.zerossl.com/certificates/$CERT_ID" --data-urlencode "access_key=$access_key")"
+  local cert_status="$(echo "$status_resp" | jq -r '.status // "unknown"')"
+
+  echo "$LOG_PREFIX 📋 Statut du certificat: $cert_status"
+
+  if [ "$cert_status" = "issued" ]; then
+    echo "$LOG_PREFIX 🔄 Téléchargement du certificat..."
+    download_certificate || { echo "$LOG_PREFIX ❌ Échec téléchargement"; exit 1; }
+    echo "$LOG_PREFIX 🎉 Renouvellement automatique terminé avec succès !"
+    echo "$LOG_PREFIX 💡 Pensez à redémarrer votre serveur web (systemctl restart nginx/apache2)"
+    exit 0
   else
-    echo "Le certificat est toujours valide (expiration: $expiration_raw)."
+    echo "$LOG_PREFIX ⚠️ Certificat pas encore émis (status: $cert_status)."
+    echo "$LOG_PREFIX 💡 Relancez 'renew-auto' plus tard ou vérifiez manuellement."
+    exit 1
   fi
 }
 
@@ -413,6 +543,9 @@ case "$1" in
     ;;
   renew)
     renew_certificate
+    ;;
+  renew-auto)
+    renew_auto
     ;;
   verify)
     get_certificate
