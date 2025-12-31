@@ -424,6 +424,12 @@ renew_certificate() {
 
 # Fonction pour renouveler automatiquement (crontab, sans interaction)
 renew_auto() {
+  # Créer le fichier de log s'il n'existe pas
+  local LOG_FILE="/var/log/zerossl_renew.log"
+  if [ ! -f "$LOG_FILE" ]; then
+    touch "$LOG_FILE" 2>/dev/null || true
+  fi
+
   local LOG_PREFIX="[renew-auto $(date '+%Y-%m-%d %H:%M:%S')]"
   echo "$LOG_PREFIX Démarrage du renouvellement automatique pour $DOMAIN"
 

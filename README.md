@@ -159,7 +159,7 @@ Ajoutez cette ligne :
 
 - **Port 80 libre** au moment de l'exécution (pas d'autre service qui bloque)
 - **Docker accessible** par root
-- **Créer le fichier de log** : `sudo touch /var/log/zerossl_renew.log`
+- **Fichier de log** : `/var/log/zerossl_renew.log` (créé automatiquement par le script)
 
 ### 💡 Conseil
 
